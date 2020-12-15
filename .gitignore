@@ -39,6 +39,7 @@
 *.symtypes
 *.tar
 *.xz
+*.reverse.dts
 Module.symvers
 modules.builtin
 
