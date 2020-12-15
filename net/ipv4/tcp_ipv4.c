@@ -481,7 +481,8 @@ void tcp_v4_err(struct sk_buff *icmp_skb, u32 info)
 		icsk->icsk_rto = inet_csk_rto_backoff(icsk, TCP_RTO_MAX);
 
 		skb = tcp_write_queue_head(sk);
-		BUG_ON(!skb);
+		if (WARN_ON_ONCE(!skb))
+			break;
 
 		tcp_mstamp_refresh(tp);
 		delta_us = (u32)(tp->tcp_mstamp - skb->skb_mstamp);
@@ -1502,7 +1503,9 @@ discard:
 
 csum_err:
 	TCP_INC_STATS(sock_net(sk), TCP_MIB_CSUMERRORS);
+	DROPDUMP_QUEUE_SKB(skb, NET_DROPDUMP_TCP_MIB_CSUMERRORS);
 	TCP_INC_STATS(sock_net(sk), TCP_MIB_INERRS);
+	DROPDUMP_QUEUE_SKB(skb, NET_DROPDUMP_TCP_MIB_INERRS);
 	goto discard;
 }
 EXPORT_SYMBOL(tcp_v4_do_rcv);
@@ -1763,8 +1766,10 @@ no_tcp_socket:
 	if (tcp_checksum_complete(skb)) {
 csum_error:
 		__TCP_INC_STATS(net, TCP_MIB_CSUMERRORS);
+		DROPDUMP_QUEUE_SKB(skb, NET_DROPDUMP_TCP_MIB_CSUMERRORS);
 bad_packet:
 		__TCP_INC_STATS(net, TCP_MIB_INERRS);
+		DROPDUMP_QUEUE_SKB(skb, NET_DROPDUMP_TCP_MIB_INERRS);
 	} else {
 		tcp_v4_send_reset(NULL, skb);
 	}
