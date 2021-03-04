@@ -72,7 +72,7 @@
 		uart0_bus: uart0-bus {
 			samsung,pins = "gpq0-3", "gpq0-4";
 			samsung,pin-function = <2>;
-			samsung,pin-pud = <0>;
+			samsung,pin-pud = <3>;
 		};
 
 		speedy_bus: speedy-bus {

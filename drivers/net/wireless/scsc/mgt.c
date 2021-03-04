@@ -8,7 +8,7 @@
 #include <linux/firmware.h>
 #include <scsc/kic/slsi_kic_lib.h>
 
-#ifdef CONFIG_ARCH_EXYNOS
+#if defined(CONFIG_ARCH_EXYNOS) || defined(CONFIG_ARCH_EXYNOS9)
 #include <linux/soc/samsung/exynos-soc.h>
 #endif
 
@@ -20,6 +20,7 @@
 #include <scsc/scsc_mx.h>
 #include <scsc/scsc_release.h>
 #include "mgt.h"
+#include "ioctl.h"
 #include "debug.h"
 #include "mlme.h"
 #include "netif.h"
@@ -310,7 +311,7 @@ mac_default:
 	mx140_file_release_conf(sdev->maxwell_core, e);
 
 	SLSI_ETHER_COPY(addr, SLSI_DEFAULT_HW_MAC_ADDR);
-#ifdef CONFIG_ARCH_EXYNOS
+#if defined(CONFIG_ARCH_EXYNOS) || defined(CONFIG_ARCH_EXYNOS9)
 	/* Randomise MAC address from the soc uid */
 	addr[3] = (exynos_soc_info.unique_id & 0xFF0000000000) >> 40;
 	addr[4] = (exynos_soc_info.unique_id & 0x00FF00000000) >> 32;
@@ -2481,6 +2482,7 @@ void slsi_vif_deactivated(struct slsi_dev *sdev, struct net_device *dev)
 	/* The station type VIF is deactivated when the AP connection is lost */
 	if (ndev_vif->vif_type == FAPI_VIFTYPE_STATION) {
 		ndev_vif->sta.group_key_set = false;
+		ndev_vif->sta.wep_key_set = false;
 		ndev_vif->sta.vif_status = SLSI_VIF_STATUS_UNSPECIFIED;
 		memset(ndev_vif->sta.keepalive_host_tag, 0, sizeof(ndev_vif->sta.keepalive_host_tag));
 
@@ -3476,12 +3478,29 @@ int  slsi_set_arp_packet_filter(struct slsi_dev *sdev, struct net_device *dev)
 }
 
 #ifdef CONFIG_SCSC_WLAN_ENHANCED_PKT_FILTER
-int slsi_set_enhanced_pkt_filter(struct net_device *dev, u8 pkt_filter_enable)
+int slsi_set_enhanced_pkt_filter(struct net_device *dev, char *command, int buf_len)
 {
 	struct netdev_vif *netdev_vif = netdev_priv(dev);
 	struct slsi_dev   *sdev = netdev_vif->sdev;
+	struct slsi_ioctl_args *ioctl_args = NULL;
 	int ret = 0;
 	int is_suspend = 0;
+	int pkt_filter_enable;
+
+	ioctl_args = slsi_get_private_command_args(command, buf_len, 1);
+	SLSI_VERIFY_IOCTL_ARGS(sdev, ioctl_args);
+
+	if (!slsi_str_to_int(ioctl_args->args[0], &pkt_filter_enable)) {
+		SLSI_ERR(sdev, "Invalid string: '%s'\n", ioctl_args->args[0]);
+		kfree(ioctl_args);
+		return -EINVAL;
+	}
+
+	if (pkt_filter_enable != 0 && pkt_filter_enable != 1) {
+		SLSI_ERR(sdev, "Invalid pkt_filter_enable value: '%s'\n", ioctl_args->args[0]);
+		kfree(ioctl_args);
+		return -EINVAL;
+	}
 
 	SLSI_MUTEX_LOCK(sdev->device_config_mutex);
 	is_suspend = sdev->device_config.user_suspend_mode;
@@ -3489,11 +3508,13 @@ int slsi_set_enhanced_pkt_filter(struct net_device *dev, u8 pkt_filter_enable)
 
 	if (is_suspend) {
 		SLSI_ERR(sdev, "Host is in early suspend state.\n");
+		kfree(ioctl_args);
 		return -EPERM; /* set_enhanced_pkt_filter should not be called after suspend */
 	}
 
 	sdev->enhanced_pkt_filter_enabled = pkt_filter_enable;
 	SLSI_INFO(sdev, "Enhanced packet filter is %s", (pkt_filter_enable ? "enabled" : "disabled"));
+	kfree(ioctl_args);
 	return ret;
 }
 
@@ -3963,7 +3984,8 @@ int slsi_ip_address_changed(struct slsi_dev *sdev, struct net_device *dev, __be3
 			return -EINVAL;
 
 		if (!(peer->capabilities & WLAN_CAPABILITY_PRIVACY) ||
-		    (ndev_vif->sta.group_key_set && peer->pairwise_key_set))
+		    (ndev_vif->sta.group_key_set && peer->pairwise_key_set) ||
+		    ndev_vif->sta.wep_key_set)
 			slsi_send_gratuitous_arp(sdev, dev);
 		else
 			ndev_vif->sta.gratuitous_arp_needed = true;
@@ -4421,6 +4443,7 @@ int slsi_p2p_dev_probe_rsp_ie(struct slsi_dev *sdev, struct net_device *dev, u8 
 				slsi_p2p_vif_deactivate(sdev, dev, true);
 			}
 		}
+		kfree(probe_rsp_ie);
 	}
 
 exit:
@@ -5609,20 +5632,28 @@ int slsi_check_if_channel_restricted_already(struct slsi_dev *sdev, int channel)
 	return 0;
 }
 
-int slsi_set_wifisharing_permitted_channels(struct slsi_dev *sdev, struct net_device *dev, char *arg)
+int slsi_set_wifisharing_permitted_channels(struct net_device *dev, char *buffer, int buf_len)
 {
+	struct netdev_vif *ndev_vif = netdev_priv(dev);
+	struct slsi_dev   *sdev = ndev_vif->sdev;
+	struct slsi_ioctl_args *ioctl_args = NULL;
 	int error = 0;
 	int i = 0;
 	int bit = 0; /* find which bit to set */
 	int j = 0;
 	int bit_mask = 0;
 	int num_channels = 0;
-	int readbyte = 0;
-	int offset = 0;
 	int indoor_chan_arg = 0;
 	u8 *permitted_channels = NULL;
 
-	readbyte = slsi_str_to_int(&arg[offset], &indoor_chan_arg);
+	ioctl_args = slsi_get_private_command_args(buffer, buf_len, 26);
+	SLSI_VERIFY_IOCTL_ARGS(sdev, ioctl_args);
+
+	if (!slsi_str_to_int(ioctl_args->args[0], &indoor_chan_arg)) {
+		SLSI_ERR(sdev, "Invalid channel_count string: '%s'\n", ioctl_args->args[0]);
+		kfree(ioctl_args);
+		return -EINVAL;
+	}
 	permitted_channels = kmalloc(8, GFP_KERNEL);
 
 	if (!permitted_channels) {
@@ -5630,9 +5661,9 @@ int slsi_set_wifisharing_permitted_channels(struct slsi_dev *sdev, struct net_de
 		goto exit;
 	}
 
-	/* res = 0 -> all 5G channels permitted */
-	/* res = -1 -> no 5G channel permitted */
-	/* res = n -> set n indoor channels */
+	/* indoor_chan_arg = 0 -> all 5G channels permitted */
+	/* indoor_chan_arg = -1 -> no 5G channel permitted */
+	/* indoor_chan_arg = n -> set n indoor channels */
 	if (indoor_chan_arg == 0) {
 		SLSI_DBG2(sdev, SLSI_MLME, "All 5G channels permitted\n");
 		sdev->num_5g_restricted_channels = 0;
@@ -5657,7 +5688,12 @@ int slsi_set_wifisharing_permitted_channels(struct slsi_dev *sdev, struct net_de
 			sdev->wifi_sharing_5g_restricted_channels[i] = slsi_5ghz_all_chans[i];
 		}
 		sdev->num_5g_restricted_channels = 25;
-	} else {
+	} else if (indoor_chan_arg >= 1 && indoor_chan_arg <= 25) {
+		if ((ioctl_args->arg_count - 1) < indoor_chan_arg) {
+			SLSI_ERR(sdev, "No. of args actually present are lesser than expected %d\n", indoor_chan_arg);
+			error = -EINVAL;
+			goto exit;
+		}
 		sdev->num_5g_restricted_channels = 0;
 		for (i = 0; i < 25 ; i++)
 			sdev->wifi_sharing_5g_restricted_channels[i] = 0;
@@ -5670,14 +5706,18 @@ int slsi_set_wifisharing_permitted_channels(struct slsi_dev *sdev, struct net_de
 		permitted_channels[6] = 0x00;
 		permitted_channels[7] = 0x00;
 		num_channels = indoor_chan_arg;
-		if (num_channels > 25) {
-			error = -EINVAL;
-			goto exit;
-		}
 
 		for (i = 0; i < num_channels; i++) {
-			offset = offset + readbyte + 1;
-			readbyte = slsi_str_to_int(&arg[offset], &indoor_chan_arg);
+			if (!slsi_str_to_int(ioctl_args->args[i + 1], &indoor_chan_arg)) {
+				SLSI_ERR(sdev, "Invalid channel string: '%s'\n", ioctl_args->args[i + 1]);
+				error = -EINVAL;
+				goto exit;
+			}
+			if (indoor_chan_arg < 36 || indoor_chan_arg > 165) {
+				SLSI_ERR(sdev, "Invalid channel %d\n", indoor_chan_arg);
+				error = -EINVAL;
+				goto exit;
+			}
 			sdev->wifi_sharing_5g_restricted_channels[(sdev->num_5g_restricted_channels)++] = indoor_chan_arg;
 
 			for (j = 0; j < 25; j++) {
@@ -5695,6 +5735,10 @@ int slsi_set_wifisharing_permitted_channels(struct slsi_dev *sdev, struct net_de
 			bit_mask  = (bit % 8);
 			permitted_channels[bit / 8] &= (u8)(~(1 << (bit_mask)));
 		}
+	} else {
+		SLSI_ERR(sdev, "Invalid channel count %d\n", indoor_chan_arg);
+		error = -EINVAL;
+		goto exit;
 	}
 
 	error = slsi_mlme_wifisharing_permitted_channels(sdev, dev, permitted_channels);
@@ -5702,6 +5746,7 @@ int slsi_set_wifisharing_permitted_channels(struct slsi_dev *sdev, struct net_de
 exit:
 	if (error)
 		SLSI_ERR(sdev, "Error in setting wifi sharing permitted channels. error = %d\n", error);
+	kfree(ioctl_args);
 	kfree(permitted_channels);
 	return error;
 }

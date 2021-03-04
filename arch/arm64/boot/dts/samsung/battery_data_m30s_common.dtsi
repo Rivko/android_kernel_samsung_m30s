@@ -26,6 +26,32 @@
 				fuelgauge,sw_v_empty_voltage = <3200>;
 				fuelgauge,sw_v_empty_voltage_cisd = <3100>;
 				fuelgauge,sw_v_empty_recover_voltage = <3480>;
+				fuelgauge,ttf_capacity = <4775>;
+				fuelgauge,cv_data = <
+					2370	870	2091
+					2138	880	1991
+					1974	889	1886
+					1886	898	1781
+					1750	905	1687
+					1640	912	1594
+					1520	920	1488
+					1432	926	1396
+					1322	932	1293
+					1246	938	1189
+					1133	943	1082
+					1080	948	978
+					993		953	873
+					943		956	799
+					912		961	694
+					840		966	592
+					792		971	495
+					746		976	390
+					696		979	296
+					648		983	192
+					604		987	98
+					547		995	0
+					>;
+
 				battery_params {
 					battery,id = <0>;
 					battery0,battery_type = <4400 0x0 0x29E2>; /* batt_v_max, min_cap, cap */
@@ -148,14 +174,14 @@
 				battery,ovp_uvlo_check_type = <3>; /* SEC_BATTERY_OVP_UVLO_CHGPOLLING */
 
 				battery,temp_check_count = <1>;
-				battery,temp_highlimit_threshold_normal = <800>;
-				battery,temp_highlimit_recovery_normal = <780>;
+				battery,temp_highlimit_threshold_normal = <700>;
+				battery,temp_highlimit_recovery_normal = <680>;
 				battery,temp_high_threshold_normal = <500>;
 				battery,temp_high_recovery_normal = <480>;
 				battery,temp_low_threshold_normal = <0>;
 				battery,temp_low_recovery_normal = <20>;
-				battery,temp_highlimit_threshold_lpm = <800>;
-				battery,temp_highlimit_recovery_lpm = <780>;
+				battery,temp_highlimit_threshold_lpm = <700>;
+				battery,temp_highlimit_recovery_lpm = <680>;
 				battery,temp_high_threshold_lpm = <500>;
 				battery,temp_high_recovery_lpm = <480>;
 				battery,temp_low_threshold_lpm = <0>;
@@ -209,7 +235,7 @@
 				battery,recharge_check_count = <1>;
 				battery,recharge_condition_type = <4>; /* SEC_BATTERY_RECHARGE_CONDITION_VCELL */
 				battery,recharge_condition_soc = <98>;
-				battery,recharge_condition_vcell = <4270>;
+				battery,recharge_condition_vcell = <4280>;
 
 				battery,charging_total_time = <14400>;
 				battery,hv_charging_total_time = <10800>;
@@ -258,7 +284,7 @@
 				battery,siop_hv_wireless_charging_limit_current = <700>;
 				battery,siop_store_hv_wireless_input_limit_current = <450>;
 
-				battery,ttf_hv_charge_current = <2350>;
+				battery,ttf_hv_charge_current = <2080>;
 				battery,ttf_hv_wireless_charge_current = <1050>;
 				battery,ttf_wireless_charge_current = <900>;
 
@@ -278,6 +304,13 @@
 						400 4310 4240 4210 91	/*4.31*/
 						700 4290 4220 4190 90	/*4.29*/
 						1000 4240 4170 4140 89	/*4.24*/
+						>;
+
+				battery,health_condition = <
+						/* CYCLE ASOC */
+						900 0	/* GOOD */
+						1200 0 /* NORMAL */
+						1500 0 /* AGED */
 						>;
 
 				battery,pre_afc_input_current = <500>; /* mA */

@@ -952,6 +952,7 @@ struct reclaim_stat {
 	unsigned nr_activate;
 	unsigned nr_ref_keep;
 	unsigned nr_unmap_fail;
+	unsigned nr_lazyfree_fail;
 };
 
 /*
@@ -975,6 +976,7 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 	unsigned nr_immediate = 0;
 	unsigned nr_ref_keep = 0;
 	unsigned nr_unmap_fail = 0;
+	unsigned nr_lazyfree_fail = 0;
 
 	cond_resched();
 
@@ -1182,11 +1184,15 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 		 */
 		if (page_mapped(page)) {
 			enum ttu_flags flags = ttu_flags | TTU_BATCH_FLUSH;
+			bool was_swapbacked = PageSwapBacked(page);
 
 			if (unlikely(PageTransHuge(page)))
 				flags |= TTU_SPLIT_HUGE_PMD;
+
 			if (!try_to_unmap(page, flags)) {
 				nr_unmap_fail++;
+				if (!was_swapbacked && PageSwapBacked(page))
+					nr_lazyfree_fail++;
 				goto activate_locked;
 			}
 		}
@@ -1366,6 +1372,7 @@ keep:
 		stat->nr_activate = pgactivate;
 		stat->nr_ref_keep = nr_ref_keep;
 		stat->nr_unmap_fail = nr_unmap_fail;
+		stat->nr_lazyfree_fail = nr_lazyfree_fail;
 	}
 	return nr_reclaimed;
 }
@@ -1378,7 +1385,8 @@ unsigned long reclaim_clean_pages_from_list(struct zone *zone,
 		.priority = DEF_PRIORITY,
 		.may_unmap = 1,
 	};
-	unsigned long ret;
+	struct reclaim_stat stat;
+	unsigned long nr_reclaimed;
 	struct page *page, *next;
 	LIST_HEAD(clean_pages);
 
@@ -1390,11 +1398,21 @@ unsigned long reclaim_clean_pages_from_list(struct zone *zone,
 		}
 	}
 
-	ret = shrink_page_list(&clean_pages, zone->zone_pgdat, &sc,
-			TTU_IGNORE_ACCESS, NULL, true);
+	nr_reclaimed = shrink_page_list(&clean_pages, zone->zone_pgdat, &sc,
+			TTU_IGNORE_ACCESS, &stat, true);
 	list_splice(&clean_pages, page_list);
-	mod_node_page_state(zone->zone_pgdat, NR_ISOLATED_FILE, -ret);
-	return ret;
+	mod_node_page_state(zone->zone_pgdat, NR_ISOLATED_FILE, -nr_reclaimed);
+	/*
+	 * Since lazyfree pages are isolated from file LRU from the beginning,
+	 * they will rotate back to anonymous LRU in the end if it failed to
+	 * discard so isolated count will be mismatched.
+	 * Compensate the isolated count for both LRU lists.
+	 */
+	mod_node_page_state(zone->zone_pgdat, NR_ISOLATED_ANON,
+			    stat.nr_lazyfree_fail);
+	mod_node_page_state(zone->zone_pgdat, NR_ISOLATED_FILE,
+			    -stat.nr_lazyfree_fail);
+	return nr_reclaimed;
 }
 
 /*
@@ -1751,8 +1769,6 @@ static int current_may_throttle(void)
 		current->backing_dev_info == NULL ||
 		bdi_write_congested(current->backing_dev_info);
 }
-
-static inline bool need_memory_boosting(struct pglist_data *pgdat);
 
 /*
  * shrink_inactive_list() is a helper for shrink_node().  It returns the number
@@ -2289,11 +2305,15 @@ static inline bool mem_boost_pgdat_wmark(struct pglist_data *pgdat)
 	return false;
 }
 
-static inline bool need_memory_boosting(struct pglist_data *pgdat)
+#define MEM_BOOST_THRESHOLD ((600 * 1024 * 1024) / (PAGE_SIZE))
+inline bool need_memory_boosting(struct pglist_data *pgdat)
 {
 	bool ret;
+	unsigned long pgdatfile = node_page_state(pgdat, NR_ACTIVE_FILE) +
+				node_page_state(pgdat, NR_INACTIVE_FILE);
 
-	if (time_after(jiffies, last_mode_change + MEM_BOOST_MAX_TIME))
+	if (time_after(jiffies, last_mode_change + MEM_BOOST_MAX_TIME) ||
+			pgdatfile < MEM_BOOST_THRESHOLD)
 		mem_boost_mode = NO_BOOST;
 
 	if (memory_boosting_disabled)
@@ -2636,7 +2656,10 @@ static void shrink_node_memcg(struct pglist_data *pgdat, struct mem_cgroup *memc
 	}
 	blk_finish_plug(&plug);
 	sc->nr_reclaimed += nr_reclaimed;
-
+	
+	if (need_memory_boosting(NULL))
+		return;
+	
 	/*
 	 * Even if we did not try to evict anon pages at all, we want to
 	 * rebalance the anon lru active/inactive ratio.

@@ -1839,6 +1839,43 @@ void sec_bat_aging_check(struct sec_battery_info *battery)
 }
 #endif
 
+void sec_bat_check_battery_health(struct sec_battery_info *battery)
+{
+	union power_supply_propval value;
+	battery_health_condition state;
+	int i, battery_health;
+
+#if defined(CONFIG_BATTERY_AGE_FORECAST_DETACHABLE)
+	pr_err("%s: detachable battery not support\n", __func__);
+	return;
+#endif
+
+	/* check to support ASoC and Cycle */
+	psy_do_property(battery->pdata->fuelgauge_name, get,
+		POWER_SUPPLY_PROP_ENERGY_FULL, value);
+#if !defined(CONFIG_BATTERY_AGE_FORECAST)
+	value.intval = -1;
+#endif
+	if (value.intval <= 0 || battery->pdata->health_condition == NULL) {
+		pr_err("%s: does not support cycle or asoc or health_condition\n", __func__);
+		return;
+	}
+	/* Checking Cycle and ASoC */
+	state.cycle = state.asoc = BATTERY_HEALTH_BAD;
+	for (i = BATTERY_HEALTH_MAX - 1; i >= 0; i--) {
+		if (battery->pdata->health_condition[i].cycle >= (battery->batt_cycle % 10000))
+			state.cycle = i + BATTERY_HEALTH_GOOD;
+		if (battery->pdata->health_condition[i].asoc <= battery->batt_asoc)
+			state.asoc = i + BATTERY_HEALTH_GOOD;
+	}
+	battery_health = max(state.cycle, state.asoc);
+	pr_info("%s: update battery_health(%d), (%d - %d)\n",
+		__func__, battery_health, state.cycle, state.asoc);
+	/* Update battery health */
+	sec_bat_set_misc_event(battery,
+		(battery_health << BATTERY_HEALTH_SHIFT), BATT_MISC_EVENT_BATTERY_HEALTH);
+}
+
 static bool sec_bat_temperature(
 				struct sec_battery_info *battery)
 {
@@ -3874,6 +3911,8 @@ continue_monitor:
 skip_current_monitor:
 	psy_do_property(battery->pdata->charger_name, get,
 		POWER_SUPPLY_EXT_PROP_MONITOR_WORK, val);
+	psy_do_property(battery->pdata->fuelgauge_name, get,
+		POWER_SUPPLY_EXT_PROP_MONITOR_WORK, val);
 
 	dev_dbg(battery->dev,
 		"%s: HLT(%d) HLR(%d) HT(%d), HR(%d), LT(%d), LR(%d), lpcharge(%d)\n",
@@ -4236,7 +4275,8 @@ static void sec_bat_cable_work(struct work_struct *work)
 
 	/* to clear this value when cable type switched without dettach */
 	if ((is_wired_type(battery->cable_type) && is_wireless_type(current_cable_type)) ||
-	    (is_wireless_type(battery->cable_type) && is_wired_type(current_cable_type)))
+	    (is_wireless_type(battery->cable_type) && is_wired_type(current_cable_type)) ||
+	    (battery->muic_cable_type == ATTACHED_DEV_AFC_CHARGER_DISABLED_MUIC))
 		battery->max_charge_power = 0;
 
 	if ((current_cable_type == battery->cable_type) && !is_slate_mode(battery)) {
@@ -5535,6 +5575,7 @@ static int sec_bat_cable_check(struct sec_battery_info *battery,
 	case ATTACHED_DEV_UNOFFICIAL_ID_TA_MUIC:
 	case ATTACHED_DEV_UNOFFICIAL_ID_ANY_MUIC:
 	case ATTACHED_DEV_UNSUPPORTED_ID_VB_MUIC:
+	case ATTACHED_DEV_AFC_CHARGER_DISABLED_MUIC:
 		current_cable_type = SEC_BATTERY_CABLE_TA;
 		break;
 	case ATTACHED_DEV_AFC_CHARGER_5V_MUIC:
@@ -6193,7 +6234,7 @@ static int batt_handle_notification(struct notifier_block *nb,
 				(battery->muic_cable_type == ATTACHED_DEV_JIG_USB_ON_MUIC ? BATT_MISC_EVENT_UNDEFINED_RANGE_TYPE : 0);
 	}
 #endif
-	block_water_event |= (battery->muic_cable_type == ATTACHED_DEV_UNDEFINED_RANGE_MUIC) ? BATT_MISC_EVENT_UNDEFINED_RANGE_TYPE : 0);
+	block_water_event |= (battery->muic_cable_type == ATTACHED_DEV_UNDEFINED_RANGE_MUIC ? BATT_MISC_EVENT_UNDEFINED_RANGE_TYPE : 0);
 	sec_bat_set_misc_event(battery, block_water_event, BATT_MISC_EVENT_UNDEFINED_RANGE_TYPE);
 
 	if (battery->muic_cable_type == ATTACHED_DEV_HICCUP_MUIC) {
@@ -6705,6 +6746,7 @@ static int sec_battery_probe(struct platform_device *pdev)
 	battery->pdata->age_step = 0;
 #endif
 
+	battery->batt_asoc = 100;
 	battery->health_change = false;
 
 	/* Check High Voltage charging option for wireless charging */

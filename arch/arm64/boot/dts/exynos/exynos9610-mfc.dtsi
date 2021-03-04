@@ -31,7 +31,7 @@
 		ip_ver = <0x1202>;
 
 		/* Debug mode */
-		debug_mode = <1>;
+		debug_mode = <0>;
 
 		/* Sysmmu check */
 		share_sysmmu = <0>;

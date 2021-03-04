@@ -4466,7 +4466,7 @@ int slsi_mlme_set_country(struct slsi_dev *sdev, char *alpha2)
 	struct slsi_mib_data mib_data = { 0, NULL };
 	struct sk_buff    *req;
 	struct sk_buff    *cfm;
-	int country_index = 0;
+	int country_index = -1;
 	u32 rules_len = 0;
 	u16 country_code = 0;
 	u8 append_byte = 0;
@@ -4482,6 +4482,11 @@ int slsi_mlme_set_country(struct slsi_dev *sdev, char *alpha2)
 				country_index = i;
 				break;
 			}
+		}
+
+		if (country_index == -1) {
+			SLSI_ERR(sdev, "Invalid country code!\n");
+			return -EINVAL;
 		}
 
 		/* 7 octets for each rule */

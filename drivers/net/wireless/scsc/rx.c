@@ -588,9 +588,9 @@ void slsi_scan_complete(struct slsi_dev *sdev, struct net_device *dev, u16 scan_
 	SLSI_MUTEX_LOCK(ndev_vif->scan_result_mutex);
 	if (SLSI_IS_VIF_INDEX_WLAN(ndev_vif)) {
 		slsi_scan_update_ssid_map(sdev, dev, scan_id);
-		result_count = &count;
 		max_count  = slsi_dev_get_scan_result_count();
 	}
+	result_count = &count;
 	scan = slsi_dequeue_cached_scan_result(&ndev_vif->scan[scan_id], result_count);
 	while (scan) {
 		scan_results_count++;
@@ -641,7 +641,7 @@ int slsi_set_2g_auto_channel(struct slsi_dev *sdev, struct netdev_vif  *ndev_vif
 			     struct slsi_acs_chan_info *ch_info)
 {
 	int i = 0, j = 0, avg_load, total_num_ap, total_rssi, adjacent_rssi;
-	bool all_bss_load = true, none_bss_load = true;
+	bool all_bss_load = true;
 	int  min_avg_chan_utilization = INT_MAX, min_adjacent_rssi = INT_MAX;
 	int ch_idx_min_load = 0, ch_idx_min_rssi = 0;
 	int min_avg_chan_utilization_20 = INT_MAX, min_adjacent_rssi_20 = INT_MAX;
@@ -671,7 +671,6 @@ int slsi_set_2g_auto_channel(struct slsi_dev *sdev, struct netdev_vif  *ndev_vif
 				   ch_info[i].num_ap < ch_info[ch_idx_min_load_20].num_ap) {
 				ch_idx_min_load_20 = i;
 			}
-			none_bss_load = false;
 		} else {
 			SLSI_DBG3(sdev, SLSI_MLME, "BSS load IE not found\n");
 			all_bss_load = false;
@@ -1564,7 +1563,6 @@ exit:
 void slsi_rx_roam_ind(struct slsi_dev *sdev, struct net_device *dev, struct sk_buff *skb)
 {
 	struct netdev_vif         *ndev_vif = netdev_priv(dev);
-	enum ieee80211_statuscode status = WLAN_STATUS_SUCCESS;
 
 	SLSI_UNUSED_PARAMETER(sdev);
 
@@ -1579,11 +1577,7 @@ void slsi_rx_roam_ind(struct slsi_dev *sdev, struct net_device *dev, struct sk_b
 		goto exit_with_lock;
 	}
 
-	if (WARN(ndev_vif->vif_type != FAPI_VIFTYPE_STATION, "Not a Station VIF\n"))
-		goto exit_with_lock;
-
-	if (fapi_get_u16(skb, u.mlme_roam_ind.result_code) != FAPI_RESULTCODE_HOST_REQUEST_SUCCESS)
-		status = WLAN_STATUS_UNSPECIFIED_FAILURE;
+	WARN(ndev_vif->vif_type != FAPI_VIFTYPE_STATION, "Not a Station VIF\n");
 
 exit_with_lock:
 	SLSI_MUTEX_UNLOCK(ndev_vif->vif_mutex);
@@ -2320,7 +2314,12 @@ static void slsi_rx_p2p_device_discovered_ind(struct slsi_dev *sdev, struct net_
 
 	SLSI_UNUSED_PARAMETER(sdev);
 
-	SLSI_NET_DBG2(dev, SLSI_CFG80211, "Freq = %d\n", ndev_vif->chan->center_freq);
+	if (ndev_vif->chan) {
+		SLSI_NET_DBG2(dev, SLSI_CFG80211, "Freq = %d\n", ndev_vif->chan->center_freq);
+	} else {
+		SLSI_NET_ERR(dev, "ndev_vif->chan is NULL\n");
+		return;
+	}
 
 	/* Only Probe Request is expected as of now */
 	mgmt_len = fapi_get_mgmtlen(skb);

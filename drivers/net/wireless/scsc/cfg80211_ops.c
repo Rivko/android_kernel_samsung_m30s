@@ -256,6 +256,7 @@ int slsi_add_key(struct wiphy *wiphy, struct net_device *dev,
 		SLSI_NET_DBG3(dev, SLSI_CFG80211, "WEP Key: store key\n");
 		r = slsi_mlme_set_key(sdev, dev, key_index, FAPI_KEYTYPE_WEP, bc_mac_addr, params);
 		if (r == FAPI_RESULTCODE_SUCCESS) {
+			ndev_vif->sta.wep_key_set = true;
 			/* if static ip is set before connection, after setting keys enable powersave. */
 			if (ndev_vif->ipaddress)
 				slsi_mlme_powermgt(sdev, dev, ndev_vif->set_power_mode);
@@ -1076,7 +1077,11 @@ int slsi_connect(struct wiphy *wiphy, struct net_device *dev,
 	ndev_vif->chan = channel;
 	ndev_vif->sta.ssid_len = sme->ssid_len;
 	memcpy(ndev_vif->sta.ssid, sme->ssid, sme->ssid_len);
-	SLSI_ETHER_COPY(ndev_vif->sta.bssid, sme->bssid);
+	/* Always check the BSSID is not null during connection
+	 * It will cause kernel panic if we access null BSSID.
+	 */
+	if(sme->bssid)
+		SLSI_ETHER_COPY(ndev_vif->sta.bssid, sme->bssid);
 
 	if (slsi_mlme_add_vif(sdev, dev, dev->dev_addr, device_address) != 0) {
 		SLSI_NET_ERR(dev, "slsi_mlme_add_vif failed\n");
@@ -3210,8 +3215,8 @@ static int slsi_update_ft_ies(struct wiphy *wiphy, struct net_device *dev, struc
 	if (ndev_vif->vif_type == FAPI_VIFTYPE_STATION) {
 		const u8 *keo_ie_pos = NULL;
 		u8 *ie_buf = NULL;
-		u8 ie_len = 0;
-		u8 ie_buf_len = 0;
+		int ie_len = 0;
+		int ie_buf_len = 0;
 
 		keo_ie_pos = cfg80211_find_vendor_ie(WLAN_OUI_SAMSUNG, WLAN_OUI_TYPE_SAMSUNG_KEO,
 						     ndev_vif->sta.assoc_req_add_info_elem,
@@ -3227,13 +3232,20 @@ static int slsi_update_ft_ies(struct wiphy *wiphy, struct net_device *dev, struc
 				return -ENOMEM;
 			}
 			ie_len = ftie->ie_len;
+			if (ie_buf_len < ie_len) {
+				SLSI_NET_ERR(dev, "ft_ie buffer overflow!!\n");
+				kfree(ie_buf);
+				ie_buf = NULL;
+				SLSI_MUTEX_UNLOCK(ndev_vif->vif_mutex);
+				return -EINVAL;
+			}	
 			memcpy(ie_buf, ftie->ie, ie_len);
 			if ((ie_buf_len - ie_len) >= ((int)keo_ie_pos[1]+ 2)) {
 				memcpy(&ie_buf[ie_len], keo_ie_pos, ((int)keo_ie_pos[1]+ 2));
 				ie_len += (keo_ie_pos[1] + 2);
 				keo_ie_pos += (keo_ie_pos[1] + 2);
 			} else {
-				SLSI_NET_ERR(dev, "ie_buf buffer overflow!\n");
+				SLSI_NET_ERR(dev, "ie_buf buffer overflow!!\n");
 				kfree(ie_buf);
 				ie_buf = NULL;
 				SLSI_MUTEX_UNLOCK(ndev_vif->vif_mutex);

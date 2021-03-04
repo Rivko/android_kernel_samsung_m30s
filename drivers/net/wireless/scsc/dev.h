@@ -574,13 +574,14 @@ struct slsi_vif_sta {
 	u8                      regd_mc_addr_count;
 	u8                      regd_mc_addr[SLSI_MC_ADDR_ENTRY_MAX][ETH_ALEN];
 	bool                    group_key_set;
+	bool			wep_key_set;
 	struct sk_buff          *mlme_scan_ind_skb;
 	bool                    roam_in_progress;
 	int                     tdls_peer_sta_records;
 	bool                    tdls_enabled;
 	struct cfg80211_bss     *sta_bss;
 	u8                      *assoc_req_add_info_elem;
-	u8                      assoc_req_add_info_elem_len;
+	int                      assoc_req_add_info_elem_len;
 
 	/* List of seen ESS and Freq associated with them */
 	struct list_head        network_map;
@@ -906,6 +907,11 @@ struct slsi_wes_mode_roam_scan_channels {
 struct slsi_wes_mode_roam_scan_channels_legacy {
 	int n;
 	u8  channels[SLSI_MAX_CHANNEL_LIST];
+};
+
+struct slsi_ioctl_args {
+	int arg_count;
+	u8  *args[];
 };
 
 struct slsi_dev_config {
