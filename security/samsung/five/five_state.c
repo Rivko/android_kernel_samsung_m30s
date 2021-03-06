@@ -19,7 +19,6 @@
 #include "five_state.h"
 #include "five_hooks.h"
 #include "five_cache.h"
-#include "five_dsms.h"
 
 enum task_integrity_state_cause {
 	STATE_CAUSE_UNKNOWN,
@@ -30,8 +29,7 @@ enum task_integrity_state_cause {
 	STATE_CAUSE_SYSTEM_LABEL,
 	STATE_CAUSE_NOCERT,
 	STATE_CAUSE_TAMPERED,
-	STATE_CAUSE_MISMATCH_LABEL,
-	STATE_CAUSE_FSV_PROTECTED
+	STATE_CAUSE_MISMATCH_LABEL
 };
 
 struct task_verification_result {
@@ -51,9 +49,6 @@ static const char *task_integrity_state_str(
 		break;
 	case STATE_CAUSE_DMV_PROTECTED:
 		str = "dmv_protected";
-		break;
-	case STATE_CAUSE_FSV_PROTECTED:
-		str = "fsv_protected";
 		break;
 	case STATE_CAUSE_TRUSTED:
 		str = "trusted";
@@ -186,15 +181,12 @@ static bool set_first_state(struct integrity_iint_cache *iint,
 			tint = INTEGRITY_PRELOAD;
 		}
 		break;
-	case FIVE_FILE_FSVERITY:
 	case FIVE_FILE_DMVERITY:
 		if (trusted_file) {
 			cause = STATE_CAUSE_TRUSTED;
 			tint = INTEGRITY_DMVERITY_ALLOW_SIGN;
 		} else {
-			cause = (status == FIVE_FILE_FSVERITY)
-				? STATE_CAUSE_FSV_PROTECTED
-				: STATE_CAUSE_DMV_PROTECTED;
+			cause = STATE_CAUSE_DMV_PROTECTED;
 			tint = INTEGRITY_DMVERITY;
 		}
 		break;
@@ -231,8 +223,6 @@ static bool set_next_state(struct integrity_iint_cache *iint,
 	enum five_file_integrity status = five_get_cache_status(iint);
 	bool has_digsig = (status == FIVE_FILE_RSA);
 	bool dmv_protected = (status == FIVE_FILE_DMVERITY);
-	bool fsv_protected = (status == FIVE_FILE_FSVERITY);
-	bool xv_protected = dmv_protected || fsv_protected;
 	struct integrity_label *label = iint->five_label;
 	enum task_integrity_state_cause cause = STATE_CAUSE_UNKNOWN;
 	enum task_integrity_value state_tint = INTEGRITY_NONE;
@@ -266,9 +256,8 @@ static bool set_next_state(struct integrity_iint_cache *iint,
 	spin_lock(&integrity->value_lock);
 	switch (integrity->value) {
 	case INTEGRITY_PRELOAD_ALLOW_SIGN:
-		if (xv_protected) {
-			cause = fsv_protected ? STATE_CAUSE_FSV_PROTECTED
-						: STATE_CAUSE_DMV_PROTECTED;
+		if (dmv_protected) {
+			cause = STATE_CAUSE_DMV_PROTECTED;
 			state_tint = INTEGRITY_DMVERITY_ALLOW_SIGN;
 		} else if (is_system_label(label)) {
 			cause = STATE_CAUSE_SYSTEM_LABEL;
@@ -280,9 +269,8 @@ static bool set_next_state(struct integrity_iint_cache *iint,
 		is_newstate = true;
 		break;
 	case INTEGRITY_PRELOAD:
-		if (xv_protected) {
-			cause = fsv_protected ? STATE_CAUSE_FSV_PROTECTED
-						: STATE_CAUSE_DMV_PROTECTED;
+		if (dmv_protected) {
+			cause = STATE_CAUSE_DMV_PROTECTED;
 			state_tint = INTEGRITY_DMVERITY;
 		} else {
 			cause = STATE_CAUSE_HMAC;
@@ -291,21 +279,21 @@ static bool set_next_state(struct integrity_iint_cache *iint,
 		is_newstate = true;
 		break;
 	case INTEGRITY_MIXED_ALLOW_SIGN:
-		if (!xv_protected && !is_system_label(label)) {
+		if (!dmv_protected && !is_system_label(label)) {
 			cause = STATE_CAUSE_HMAC;
 			state_tint = INTEGRITY_MIXED;
 			is_newstate = true;
 		}
 		break;
 	case INTEGRITY_DMVERITY:
-		if (!xv_protected) {
+		if (!dmv_protected) {
 			cause = STATE_CAUSE_HMAC;
 			state_tint = INTEGRITY_MIXED;
 			is_newstate = true;
 		}
 		break;
 	case INTEGRITY_DMVERITY_ALLOW_SIGN:
-		if (!xv_protected) {
+		if (!dmv_protected) {
 			if (is_system_label(label)) {
 				cause = STATE_CAUSE_SYSTEM_LABEL;
 				state_tint = INTEGRITY_MIXED_ALLOW_SIGN;
@@ -361,22 +349,7 @@ void five_state_proceed(struct task_integrity *integrity,
 		if (task_result.new_tint == INTEGRITY_NONE) {
 			task_integrity_set_reset_reason(integrity,
 				state_to_reason_cause(task_result.cause), file);
-			five_hook_integrity_reset(task, file,
-				state_to_reason_cause(task_result.cause));
-
-			if  (fn != BPRM_CHECK) {
-				char comm[TASK_COMM_LEN];
-				char filename[NAME_MAX];
-				char *pathbuf = NULL;
-
-				five_dsms_reset_integrity(
-					get_task_comm(comm, task),
-					task_result.cause,
-					five_d_path(&file->f_path, &pathbuf,
-						    filename));
-				if (pathbuf)
-					__putname(pathbuf);
-			}
+			five_hook_integrity_reset(task);
 		}
 		five_audit_verbose(task, file, five_get_string_fn(fn),
 			task_result.prev_tint, task_result.new_tint,
